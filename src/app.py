@@ -5,11 +5,12 @@ A super simple FastAPI application that allows students to view and sign up
 for extracurricular activities at Mergington High School.
 """
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Query
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse
 import os
 from pathlib import Path
+from typing import List, Dict, Any
 
 app = FastAPI(title="Mergington High School API",
               description="API for viewing and signing up for extracurricular activities")
@@ -77,6 +78,12 @@ activities = {
     }
 }
 
+# Add a new in-memory structure for uploaded documents and verification status
+activity_documents: Dict[str, List[Dict[str, Any]]] = {}
+
+# Add in-memory structure for student progress tracking
+student_progress: Dict[str, Dict[int, Dict[str, Any]]] = {}
+
 
 @app.get("/")
 def root():
@@ -130,3 +137,100 @@ def unregister_from_activity(activity_name: str, email: str):
     # Remove student
     activity["participants"].remove(email)
     return {"message": f"Unregistered {email} from {activity_name}"}
+
+
+@app.post("/activities/{activity_name}/upload")
+def upload_document(activity_name: str, email: str = Form(...), file: UploadFile = File(...), score: int = Form(...)):
+    """Upload a certificate or score for an activity"""
+    if activity_name not in activities:
+        raise HTTPException(status_code=404, detail="Activity not found")
+    # Store file metadata and score (not saving file contents for simplicity)
+    doc = {
+        "email": email,
+        "filename": file.filename,
+        "content_type": file.content_type,
+        "score": score,
+        "verified": False
+    }
+    activity_documents.setdefault(activity_name, []).append(doc)
+    return {"message": f"Uploaded {file.filename} for {email} in {activity_name}"}
+
+
+@app.get("/activities/{activity_name}/documents")
+def get_activity_documents(activity_name: str):
+    """Get all uploaded documents for an activity"""
+    if activity_name not in activities:
+        raise HTTPException(status_code=404, detail="Activity not found")
+    return activity_documents.get(activity_name, [])
+
+
+@app.post("/activities/{activity_name}/verify")
+def verify_document(activity_name: str, email: str, filename: str):
+    """Admin verifies a document for an activity"""
+    docs = activity_documents.get(activity_name, [])
+    for doc in docs:
+        if doc["email"] == email and doc["filename"] == filename:
+            doc["verified"] = True
+            return {"message": f"Verified {filename} for {email} in {activity_name}"}
+    raise HTTPException(status_code=404, detail="Document not found")
+
+
+@app.get("/activities/sorted")
+def get_sorted_activities(sort_by: str = Query("name", enum=["name", "participants", "score"]), descending: bool = Query(False)):
+    """Get activities sorted by name, number of participants, or average score"""
+    def avg_score(activity_name):
+        docs = activity_documents.get(activity_name, [])
+        scores = [doc["score"] for doc in docs if doc.get("verified")]
+        return sum(scores) / len(scores) if scores else 0
+    items = list(activities.items())
+    if sort_by == "name":
+        items.sort(key=lambda x: x[0], reverse=descending)
+    elif sort_by == "participants":
+        items.sort(key=lambda x: len(x[1]["participants"]), reverse=descending)
+    elif sort_by == "score":
+        items.sort(key=lambda x: avg_score(x[0]), reverse=descending)
+    return [{"name": k, **v} for k, v in items]
+
+
+@app.get("/activities/{activity_name}/participants/sorted")
+def get_sorted_participants(activity_name: str, sort_by: str = Query("name", enum=["name", "score"]), descending: bool = Query(False)):
+    """Get participants of an activity sorted by name or score"""
+    if activity_name not in activities:
+        raise HTTPException(status_code=404, detail="Activity not found")
+    participants = activities[activity_name]["participants"]
+    docs = activity_documents.get(activity_name, [])
+    # Build participant info with scores
+    info = []
+    for email in participants:
+        score = None
+        for doc in docs:
+            if doc["email"] == email and doc.get("verified"):
+                score = doc["score"]
+                break
+        info.append({"email": email, "score": score})
+    if sort_by == "name":
+        info.sort(key=lambda x: x["email"], reverse=descending)
+    elif sort_by == "score":
+        info.sort(key=lambda x: (x["score"] if x["score"] is not None else 0), reverse=descending)
+    return info
+
+
+@app.post("/progress/update")
+def update_student_progress(email: str = Form(...), year: int = Form(...), activity_name: str = Form(...), score: int = Form(...)):
+    """Update yearly progress for a student in an activity"""
+    if activity_name not in activities:
+        raise HTTPException(status_code=404, detail="Activity not found")
+    student_progress.setdefault(email, {}).setdefault(year, {})[activity_name] = {"score": score}
+    return {"message": f"Progress updated for {email} in {activity_name} ({year})"}
+
+
+@app.get("/progress/{email}")
+def get_student_progress(email: str):
+    """Get all yearly progress records for a student"""
+    return student_progress.get(email, {})
+
+
+@app.get("/progress/{email}/{year}")
+def get_student_progress_year(email: str, year: int):
+    """Get progress for a student in a specific year"""
+    return student_progress.get(email, {}).get(year, {})
