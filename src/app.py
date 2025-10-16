@@ -81,6 +81,9 @@ activities = {
 # Add a new in-memory structure for uploaded documents and verification status
 activity_documents: Dict[str, List[Dict[str, Any]]] = {}
 
+# Add in-memory structure for student progress tracking
+student_progress: Dict[str, Dict[int, Dict[str, Any]]] = {}
+
 
 @app.get("/")
 def root():
@@ -210,3 +213,24 @@ def get_sorted_participants(activity_name: str, sort_by: str = Query("name", enu
     elif sort_by == "score":
         info.sort(key=lambda x: (x["score"] if x["score"] is not None else 0), reverse=descending)
     return info
+
+
+@app.post("/progress/update")
+def update_student_progress(email: str = Form(...), year: int = Form(...), activity_name: str = Form(...), score: int = Form(...)):
+    """Update yearly progress for a student in an activity"""
+    if activity_name not in activities:
+        raise HTTPException(status_code=404, detail="Activity not found")
+    student_progress.setdefault(email, {}).setdefault(year, {})[activity_name] = {"score": score}
+    return {"message": f"Progress updated for {email} in {activity_name} ({year})"}
+
+
+@app.get("/progress/{email}")
+def get_student_progress(email: str):
+    """Get all yearly progress records for a student"""
+    return student_progress.get(email, {})
+
+
+@app.get("/progress/{email}/{year}")
+def get_student_progress_year(email: str, year: int):
+    """Get progress for a student in a specific year"""
+    return student_progress.get(email, {}).get(year, {})
