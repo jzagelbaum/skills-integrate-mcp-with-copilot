@@ -5,11 +5,12 @@ A super simple FastAPI application that allows students to view and sign up
 for extracurricular activities at Mergington High School.
 """
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse
 import os
 from pathlib import Path
+from typing import List, Dict, Any
 
 app = FastAPI(title="Mergington High School API",
               description="API for viewing and signing up for extracurricular activities")
@@ -77,6 +78,9 @@ activities = {
     }
 }
 
+# Add a new in-memory structure for uploaded documents and verification status
+activity_documents: Dict[str, List[Dict[str, Any]]] = {}
+
 
 @app.get("/")
 def root():
@@ -130,3 +134,39 @@ def unregister_from_activity(activity_name: str, email: str):
     # Remove student
     activity["participants"].remove(email)
     return {"message": f"Unregistered {email} from {activity_name}"}
+
+
+@app.post("/activities/{activity_name}/upload")
+def upload_document(activity_name: str, email: str = Form(...), file: UploadFile = File(...), score: int = Form(...)):
+    """Upload a certificate or score for an activity"""
+    if activity_name not in activities:
+        raise HTTPException(status_code=404, detail="Activity not found")
+    # Store file metadata and score (not saving file contents for simplicity)
+    doc = {
+        "email": email,
+        "filename": file.filename,
+        "content_type": file.content_type,
+        "score": score,
+        "verified": False
+    }
+    activity_documents.setdefault(activity_name, []).append(doc)
+    return {"message": f"Uploaded {file.filename} for {email} in {activity_name}"}
+
+
+@app.get("/activities/{activity_name}/documents")
+def get_activity_documents(activity_name: str):
+    """Get all uploaded documents for an activity"""
+    if activity_name not in activities:
+        raise HTTPException(status_code=404, detail="Activity not found")
+    return activity_documents.get(activity_name, [])
+
+
+@app.post("/activities/{activity_name}/verify")
+def verify_document(activity_name: str, email: str, filename: str):
+    """Admin verifies a document for an activity"""
+    docs = activity_documents.get(activity_name, [])
+    for doc in docs:
+        if doc["email"] == email and doc["filename"] == filename:
+            doc["verified"] = True
+            return {"message": f"Verified {filename} for {email} in {activity_name}"}
+    raise HTTPException(status_code=404, detail="Document not found")
