@@ -5,7 +5,7 @@ A super simple FastAPI application that allows students to view and sign up
 for extracurricular activities at Mergington High School.
 """
 
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Query
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse
 import os
@@ -170,3 +170,43 @@ def verify_document(activity_name: str, email: str, filename: str):
             doc["verified"] = True
             return {"message": f"Verified {filename} for {email} in {activity_name}"}
     raise HTTPException(status_code=404, detail="Document not found")
+
+
+@app.get("/activities/sorted")
+def get_sorted_activities(sort_by: str = Query("name", enum=["name", "participants", "score"]), descending: bool = Query(False)):
+    """Get activities sorted by name, number of participants, or average score"""
+    def avg_score(activity_name):
+        docs = activity_documents.get(activity_name, [])
+        scores = [doc["score"] for doc in docs if doc.get("verified")]
+        return sum(scores) / len(scores) if scores else 0
+    items = list(activities.items())
+    if sort_by == "name":
+        items.sort(key=lambda x: x[0], reverse=descending)
+    elif sort_by == "participants":
+        items.sort(key=lambda x: len(x[1]["participants"]), reverse=descending)
+    elif sort_by == "score":
+        items.sort(key=lambda x: avg_score(x[0]), reverse=descending)
+    return [{"name": k, **v} for k, v in items]
+
+
+@app.get("/activities/{activity_name}/participants/sorted")
+def get_sorted_participants(activity_name: str, sort_by: str = Query("name", enum=["name", "score"]), descending: bool = Query(False)):
+    """Get participants of an activity sorted by name or score"""
+    if activity_name not in activities:
+        raise HTTPException(status_code=404, detail="Activity not found")
+    participants = activities[activity_name]["participants"]
+    docs = activity_documents.get(activity_name, [])
+    # Build participant info with scores
+    info = []
+    for email in participants:
+        score = None
+        for doc in docs:
+            if doc["email"] == email and doc.get("verified"):
+                score = doc["score"]
+                break
+        info.append({"email": email, "score": score})
+    if sort_by == "name":
+        info.sort(key=lambda x: x["email"], reverse=descending)
+    elif sort_by == "score":
+        info.sort(key=lambda x: (x["score"] if x["score"] is not None else 0), reverse=descending)
+    return info
